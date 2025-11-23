@@ -220,9 +220,8 @@ int main(int argc, char *argv[]) {
 
         if(!send_ctx->qp) {
             perror("ibv_create_qp");
+            return 1;
         }
-
-        ibv_query_qp(send_ctx->qp, &attr, IBV_QP_CAP, &init_attr);
     }
     {
         struct ibv_qp_attr attr = {
@@ -239,12 +238,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Step 1: Get local QP number and generate PSNs
-    struct ibv_qp_attr qp_attr;
-    struct ibv_qp_init_attr qp_init_attr;
-    if(ibv_query_qp(send_ctx->qp, &qp_attr, IBV_QP_QP_NUM, &qp_init_attr)) {
-        perror("ibv_query_qp");
-        return 1;
-    }
+    // QP number is available directly from the QP structure, no query needed
     uint32_t local_qpn = send_ctx->qp->qp_num;
     printf("Local QP number: %u\n", local_qpn);
     
@@ -306,12 +300,12 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // Step 4: Transition QP to RTR (Ready to Receive)
+    // Step 4: Transition QP to RTR (Ready to Receive) - required for connection establishment
     if(modify_qp_to_rtr(send_ctx, &ah_attr)) {
         return 1;
     }
     
-    // Step 5: Transition QP to RTS (Ready to Send)
+    // Step 5: Transition QP to RTS (Ready to Send) - required for sending data
     if(modify_qp_to_rts(send_ctx)) {
         return 1;
     }

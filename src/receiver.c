@@ -311,15 +311,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // Transition QP to RTR
+    // Transition QP to RTR (Ready to Receive) - sufficient for receiving data
+    // Receiver only needs RTR since it's only receiving, not sending
     if(modify_qp_to_rtr(recv_ctx, &ah_attr)) {
-        close(client_sock);
-        close(server_sock);
-        return 1;
-    }
-    
-    // Transition QP to RTS
-    if(modify_qp_to_rts(recv_ctx)) {
         close(client_sock);
         close(server_sock);
         return 1;
