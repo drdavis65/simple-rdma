@@ -24,6 +24,7 @@ struct sender_context {
 //    struct ibv_dm       *dm;
     struct ibv_cq *cq;
     struct ibv_qp *qp;
+    struct ibv_qp_ex *qpx;      // Extended QP for advanced operations
     char *buf;
     int size;
     int num_packets;
@@ -35,6 +36,7 @@ struct sender_context {
     uint32_t rq_psn;            // Receive queue PSN
     struct ibv_ah *ah;          // Address Handle (for routing)
     uint32_t remote_rkey;       // Remote memory region key (for RDMA ops)
+    uint64_t remote_addr;       // Remote memory address (for RDMA ops)
 };
 
 // Transition QP to RTR (Ready to Receive) state
@@ -68,11 +70,12 @@ static int modify_qp_to_rts(struct sender_context *ctx) {
         .timeout = 0x12,
         .retry_cnt = 6,
         .rnr_retry = 7,
-        .sq_psn = ctx->sq_psn
+        .sq_psn = ctx->sq_psn,
+        .max_rd_atomic = 1
     };
     
     int rts_mask = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
-                   IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN;
+                   IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
     
     if(ibv_modify_qp(ctx->qp, &attr, rts_mask)) {
         perror("Failed to modify QP to RTS");
@@ -202,9 +205,8 @@ int main(int argc, char *argv[]) {
     }
     
     {
-        struct ibv_qp_attr attr;
-
-        struct ibv_qp_init_attr init_attr = {
+        // Create QP as extended to support advanced operations (e.g., RDMA write with immediate)
+        struct ibv_qp_init_attr_ex init_attr_ex = {
             .send_cq = send_ctx->cq,
             .recv_cq = send_ctx->cq,
             .cap     = {
@@ -213,15 +215,28 @@ int main(int argc, char *argv[]) {
                 .max_send_sge = 1,
                 .max_recv_sge = 1,
             },
-            .qp_type = IBV_QPT_RC
+            .qp_type = IBV_QPT_RC,
+            .comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS,
+            .pd = send_ctx->pd,
+            .send_ops_flags = IBV_QP_EX_WITH_SEND | IBV_QP_EX_WITH_RDMA_WRITE
         };
 
-        send_ctx->qp = ibv_create_qp(send_ctx->pd, &init_attr);
+        send_ctx->qp = ibv_create_qp_ex(send_ctx->ctx, &init_attr_ex);
 
         if(!send_ctx->qp) {
-            perror("ibv_create_qp");
+            perror("ibv_create_qp_ex");
             return 1;
         }
+        
+        // Get extended QP pointer - since we created with ibv_create_qp_ex,
+        // the QP has extended features and can be cast to ibv_qp_ex
+        // (internally it's a verbs_qp with a union containing both ibv_qp and ibv_qp_ex)
+        send_ctx->qpx = (struct ibv_qp_ex *)send_ctx->qp;
+        if(!send_ctx->qpx) {
+            fprintf(stderr, "Failed to get extended QP\n");
+            return 1;
+        }
+        printf("Created extended QP\n");
     }
     {
         struct ibv_qp_attr attr = {
@@ -262,7 +277,8 @@ int main(int argc, char *argv[]) {
         .psn = send_ctx->sq_psn,
         .gid = *gid,
         .lid = send_ctx->portinfo.lid,
-        .rkey = 0  // Not needed for send operations
+        .rkey = 0,  // Not needed for send operations
+        .remote_addr = 0  // Not needed for sender
     };
     
     struct rdma_conn_info remote_info;
@@ -278,6 +294,8 @@ int main(int argc, char *argv[]) {
     // Store remote connection info
     send_ctx->remote_qpn = remote_info.qpn;
     send_ctx->rq_psn = remote_info.psn;
+    send_ctx->remote_rkey = remote_info.rkey;
+    send_ctx->remote_addr = remote_info.remote_addr;
     
     close(tcp_sock);
     
@@ -310,31 +328,40 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
+    // Extended QP is already available (created as extended from start)
+    
     // Step 6: Prepare data to send
     strcpy(send_ctx->buf, "Hello, RDMA!");
     size_t send_len = strlen(send_ctx->buf) + 1;
     
-    // Step 7: Post a send work request
-    struct ibv_sge sge = {
-        .addr = (uintptr_t)send_ctx->buf,
-        .length = send_len,
-        .lkey = send_ctx->mr->lkey
-    };
+   
     
-    struct ibv_send_wr wr = {
-        .wr_id = 1,  // User-defined ID for this WR
-        .sg_list = &sge,
-        .num_sge = 1,
-        .opcode = IBV_WR_SEND,
-        .send_flags = IBV_SEND_SIGNALED  // Request completion notification
-    };
-    
-    struct ibv_send_wr *bad_wr;
-    if(ibv_post_send(send_ctx->qp, &wr, &bad_wr)) {
-        perror("ibv_post_send");
+    // Example using RDMA write with immediate (requires qpx)
+    if(send_ctx->qpx) {
+        ibv_wr_start(send_ctx->qpx);
+        
+        send_ctx->qpx->wr_id = 1;
+        send_ctx->qpx->wr_flags = IBV_SEND_SIGNALED;
+        
+        // Set RDMA write with immediate operation
+        // Parameters: qp, rkey, remote_addr, imm_data (all in network byte order)
+        ibv_wr_rdma_write_imm(send_ctx->qpx, send_ctx->remote_rkey, 
+                              send_ctx->remote_addr,  // Remote address from connection exchange
+                              htonl(0x12345678));      // Immediate data (32-bit, network byte order)
+        
+        // Set scatter-gather entry (local buffer to write)
+        ibv_wr_set_sge(send_ctx->qpx, send_ctx->mr->lkey, 
+                      (uintptr_t)send_ctx->buf, send_len);
+        
+        if(ibv_wr_complete(send_ctx->qpx)) {
+            perror("ibv_wr_complete");
+            return 1;
+        }
+        printf("Posted RDMA write with immediate work request\n");
+    } else {
+        fprintf(stderr, "Extended QP not available\n");
         return 1;
     }
-    printf("Posted send work request\n");
     
     // Step 8: Poll for completion
     struct ibv_wc wc;

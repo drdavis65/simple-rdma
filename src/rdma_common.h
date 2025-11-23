@@ -14,6 +14,7 @@ struct rdma_conn_info {
     union ibv_gid gid;      // Global ID
     uint16_t lid;           // Local ID (for InfiniBand)
     uint32_t rkey;          // Remote memory region key (for RDMA ops)
+    uint64_t remote_addr;   // Remote memory address (for RDMA ops)
 };
 
 // TCP connection establishment functions

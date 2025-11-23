@@ -272,7 +272,8 @@ int main(int argc, char *argv[]) {
         .psn = recv_ctx->sq_psn,
         .gid = *gid,
         .lid = recv_ctx->portinfo.lid,
-        .rkey = recv_ctx->mr->rkey
+        .rkey = recv_ctx->mr->rkey,
+        .remote_addr = (uint64_t)(uintptr_t)recv_ctx->buf  // Address of receive buffer
     };
     
     struct rdma_conn_info remote_info;
@@ -353,6 +354,9 @@ int main(int argc, char *argv[]) {
     if(wc.status != IBV_WC_SUCCESS) {
         fprintf(stderr, "Work completion error: %s\n", ibv_wc_status_str(wc.status));
         return 1;
+    }
+    if(wc.wc_flags & IBV_WC_WITH_IMM) {
+        printf("Received immediate data: %x\n", ntohl(wc.imm_data));
     }
     
     printf("Received data: %s\n", recv_ctx->buf);
