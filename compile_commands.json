@@ -1,0 +1,27 @@
+[
+{
+  "directory": "/users/harish01/harish_work/rdma-core/external/simple-rdma/build",
+  "command": "/usr/bin/cc  -I/users/harish01/harish_work/rdma-core/external/simple-rdma/src  -Wall -Wextra -O3 -DNDEBUG -O2 -std=gnu11 -o CMakeFiles/rdma_common.dir/src/rdma_common.c.o -c /users/harish01/harish_work/rdma-core/external/simple-rdma/src/rdma_common.c",
+  "file": "/users/harish01/harish_work/rdma-core/external/simple-rdma/src/rdma_common.c"
+},
+{
+  "directory": "/users/harish01/harish_work/rdma-core/external/simple-rdma/build",
+  "command": "/usr/bin/cc  -I/users/harish01/harish_work/rdma-core/external/simple-rdma/src  -Wall -Wextra -O3 -DNDEBUG -O2 -std=gnu11 -o CMakeFiles/sender_uc.dir/src/sender_uc.c.o -c /users/harish01/harish_work/rdma-core/external/simple-rdma/src/sender_uc.c",
+  "file": "/users/harish01/harish_work/rdma-core/external/simple-rdma/src/sender_uc.c"
+},
+{
+  "directory": "/users/harish01/harish_work/rdma-core/external/simple-rdma/build",
+  "command": "/usr/bin/cc  -I/users/harish01/harish_work/rdma-core/external/simple-rdma/src  -Wall -Wextra -O3 -DNDEBUG -O2 -std=gnu11 -o CMakeFiles/receiver_uc.dir/src/receiver_uc.c.o -c /users/harish01/harish_work/rdma-core/external/simple-rdma/src/receiver_uc.c",
+  "file": "/users/harish01/harish_work/rdma-core/external/simple-rdma/src/receiver_uc.c"
+},
+{
+  "directory": "/users/harish01/harish_work/rdma-core/external/simple-rdma/build",
+  "command": "/usr/bin/cc  -I/users/harish01/harish_work/rdma-core/external/simple-rdma/src  -Wall -Wextra -O3 -DNDEBUG -O2 -std=gnu11 -o CMakeFiles/receiver_rc.dir/src/reciever_rc.c.o -c /users/harish01/harish_work/rdma-core/external/simple-rdma/src/reciever_rc.c",
+  "file": "/users/harish01/harish_work/rdma-core/external/simple-rdma/src/reciever_rc.c"
+},
+{
+  "directory": "/users/harish01/harish_work/rdma-core/external/simple-rdma/build",
+  "command": "/usr/bin/cc  -I/users/harish01/harish_work/rdma-core/external/simple-rdma/src  -Wall -Wextra -O3 -DNDEBUG -O2 -std=gnu11 -o CMakeFiles/sender_rc.dir/src/sender_rc.c.o -c /users/harish01/harish_work/rdma-core/external/simple-rdma/src/sender_rc.c",
+  "file": "/users/harish01/harish_work/rdma-core/external/simple-rdma/src/sender_rc.c"
+}
+]

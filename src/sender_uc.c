@@ -40,20 +40,20 @@ struct sender_context {
 };
 
 // Transition QP to RTR (Ready to Receive) state
+// For UC QP type, required fields: STATE, AV, PATH_MTU, DEST_QPN, RQ_PSN
 static int modify_qp_to_rtr(struct sender_context *ctx, struct ibv_ah_attr *ah_attr) {
     struct ibv_qp_attr attr = {
         .qp_state = IBV_QPS_RTR,
         .path_mtu = ctx->portinfo.active_mtu,
         .dest_qp_num = ctx->remote_qpn,
         .rq_psn = ctx->rq_psn,
-        .max_dest_rd_atomic = 16,
-        .min_rnr_timer = 0x12,
         .ah_attr = *ah_attr
     };
     
+    // For UC QP type, RTR requires: STATE, AV, PATH_MTU, DEST_QPN, RQ_PSN
+    // (max_dest_rd_atomic and min_rnr_timer are for RC QP type)
     int rtr_mask = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | 
-                   IBV_QP_DEST_QPN | IBV_QP_RQ_PSN | 
-                   IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
+                   IBV_QP_DEST_QPN | IBV_QP_RQ_PSN;
     
     if(ibv_modify_qp(ctx->qp, &attr, rtr_mask)) {
         perror("Failed to modify QP to RTR");
@@ -64,18 +64,16 @@ static int modify_qp_to_rtr(struct sender_context *ctx, struct ibv_ah_attr *ah_a
 }
 
 // Transition QP to RTS (Ready to Send) state
+// For UC QP type, only IBV_QP_STATE and IBV_QP_SQ_PSN are required
+// (timeout, retry_cnt, rnr_retry, max_rd_atomic are for RC QP type)
 static int modify_qp_to_rts(struct sender_context *ctx) {
     struct ibv_qp_attr attr = {
         .qp_state = IBV_QPS_RTS,
-        .timeout = 0x12,
-        .retry_cnt = 6,
-        .rnr_retry = 7,
-        .sq_psn = ctx->sq_psn,
-        .max_rd_atomic = 1
+        .sq_psn = ctx->sq_psn
     };
     
-    int rts_mask = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
-                   IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
+    // For UC QP type, RTS only requires STATE and SQ_PSN
+    int rts_mask = IBV_QP_STATE | IBV_QP_SQ_PSN;
     
     if(ibv_modify_qp(ctx->qp, &attr, rts_mask)) {
         perror("Failed to modify QP to RTS");
@@ -211,11 +209,11 @@ int main(int argc, char *argv[]) {
             .recv_cq = send_ctx->cq,
             .cap     = {
                 .max_send_wr = 3,
-                .max_recv_wr = 1,
+                .max_recv_wr = 1, //extend to rx_depth here
                 .max_send_sge = 1,
                 .max_recv_sge = 1,
             },
-            .qp_type = IBV_QPT_RC,
+            .qp_type = IBV_QPT_UC,
             .comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS,
             .pd = send_ctx->pd,
             .send_ops_flags = IBV_QP_EX_WITH_SEND | IBV_QP_EX_WITH_RDMA_WRITE
@@ -289,7 +287,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    printf("Received remote info: QPN=%u, PSN=%u\n", remote_info.qpn, remote_info.psn);
+    printf("Received remote info: QPN=%u, PSN=%u, rkey=0x%x, remote_addr=0x%llx\n", 
+           remote_info.qpn, remote_info.psn, remote_info.rkey, 
+           (unsigned long long)remote_info.remote_addr);
     
     // Store remote connection info
     send_ctx->remote_qpn = remote_info.qpn;
@@ -297,7 +297,13 @@ int main(int argc, char *argv[]) {
     send_ctx->remote_rkey = remote_info.rkey;
     send_ctx->remote_addr = remote_info.remote_addr;
     
-    close(tcp_sock);
+    // Validate remote info
+    if(remote_info.rkey == 0 || remote_info.remote_addr == 0) {
+        fprintf(stderr, "ERROR: Invalid remote info - rkey=0x%x, remote_addr=0x%llx\n",
+                remote_info.rkey, (unsigned long long)remote_info.remote_addr);
+        close(tcp_sock);
+        return 1;
+    }
     
     // Step 3: Create Address Handle (AH) for routing to remote
     struct ibv_ah_attr ah_attr = {
@@ -315,26 +321,44 @@ int main(int argc, char *argv[]) {
     send_ctx->ah = ibv_create_ah(send_ctx->pd, &ah_attr);
     if(!send_ctx->ah) {
         perror("ibv_create_ah");
+        close(tcp_sock);
         return 1;
     }
     
     // Step 4: Transition QP to RTR (Ready to Receive) - required for connection establishment
     if(modify_qp_to_rtr(send_ctx, &ah_attr)) {
+        close(tcp_sock);
         return 1;
     }
     
     // Step 5: Transition QP to RTS (Ready to Send) - required for sending data
     if(modify_qp_to_rts(send_ctx)) {
+        close(tcp_sock);
         return 1;
     }
+    
+    // Wait for receiver to signal it's ready (receive posted)
+    // This ensures receiver has posted receive before we send
+    char ready_msg;
+    if(recv(tcp_sock, &ready_msg, 1, MSG_WAITALL) != 1) {
+        perror("recv ready signal");
+        close(tcp_sock);
+        return 1;
+    }
+    if(ready_msg != 'R') {
+        fprintf(stderr, "ERROR: Invalid ready signal: %c\n", ready_msg);
+        close(tcp_sock);
+        return 1;
+    }
+    printf("Received ready signal from receiver\n");
+    
+    close(tcp_sock);
     
     // Extended QP is already available (created as extended from start)
     
     // Step 6: Prepare data to send
     strcpy(send_ctx->buf, "Hello, RDMA!");
     size_t send_len = strlen(send_ctx->buf) + 1;
-    
-   
     
     // Example using RDMA write with immediate (requires qpx)
     if(send_ctx->qpx) {
@@ -357,17 +381,24 @@ int main(int argc, char *argv[]) {
             perror("ibv_wr_complete");
             return 1;
         }
-        printf("Posted RDMA write with immediate work request\n");
+        printf("Posted RDMA write with immediate work request (remote_addr=0x%llx, rkey=0x%x, len=%zu)\n",
+               (unsigned long long)send_ctx->remote_addr, send_ctx->remote_rkey, send_len);
     } else {
         fprintf(stderr, "Extended QP not available\n");
         return 1;
     }
     
-    // Step 8: Poll for completion
+    // Step 8: Poll for send completion
     struct ibv_wc wc;
     int num_completions = 0;
+    int poll_count = 0;
+    printf("Polling for send completion...\n");
     do {
         num_completions = ibv_poll_cq(send_ctx->cq, 1, &wc);
+        poll_count++;
+        if(poll_count % 1000000 == 0) {
+            printf("Still polling for send completion... (count: %d)\n", poll_count);
+        }
     } while(num_completions == 0);
     
     if(wc.status != IBV_WC_SUCCESS) {

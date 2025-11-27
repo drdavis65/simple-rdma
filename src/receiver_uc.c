@@ -37,20 +37,20 @@ struct receiver_context {
 };
 
 // Transition QP to RTR (Ready to Receive) state
+// For UC QP type, required fields: STATE, AV, PATH_MTU, DEST_QPN, RQ_PSN
 static int modify_qp_to_rtr(struct receiver_context *ctx, struct ibv_ah_attr *ah_attr) {
     struct ibv_qp_attr attr = {
         .qp_state = IBV_QPS_RTR,
         .path_mtu = ctx->portinfo.active_mtu,
         .dest_qp_num = ctx->remote_qpn,
         .rq_psn = ctx->rq_psn,
-        .max_dest_rd_atomic = 16,
-        .min_rnr_timer = 0x12,
         .ah_attr = *ah_attr
     };
     
+    // For UC QP type, RTR requires: STATE, AV, PATH_MTU, DEST_QPN, RQ_PSN
+    // (max_dest_rd_atomic and min_rnr_timer are for RC QP type)
     int rtr_mask = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | 
-                   IBV_QP_DEST_QPN | IBV_QP_RQ_PSN | 
-                   IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
+                   IBV_QP_DEST_QPN | IBV_QP_RQ_PSN;
     
     if(ibv_modify_qp(ctx->qp, &attr, rtr_mask)) {
         perror("Failed to modify QP to RTR");
@@ -61,17 +61,16 @@ static int modify_qp_to_rtr(struct receiver_context *ctx, struct ibv_ah_attr *ah
 }
 
 // Transition QP to RTS (Ready to Send) state
+// For UC QP type, only IBV_QP_STATE and IBV_QP_SQ_PSN are required
 static int modify_qp_to_rts(struct receiver_context *ctx) {
     struct ibv_qp_attr attr = {
         .qp_state = IBV_QPS_RTS,
-        .timeout = 0x12,
-        .retry_cnt = 6,
-        .rnr_retry = 7,
         .sq_psn = ctx->sq_psn
     };
     
-    int rts_mask = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
-                   IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN;
+    // For UC QP type, RTS only requires STATE and SQ_PSN
+    // (timeout, retry_cnt, rnr_retry are for RC QP type)
+    int rts_mask = IBV_QP_STATE | IBV_QP_SQ_PSN;
     
     if(ibv_modify_qp(ctx->qp, &attr, rts_mask)) {
         perror("Failed to modify QP to RTS");
@@ -213,7 +212,7 @@ int main(int argc, char *argv[]) {
             .max_send_sge = 1,
             .max_recv_sge = 1,
         },
-        .qp_type = IBV_QPT_RC
+        .qp_type = IBV_QPT_UC
     };
     
     recv_ctx->qp = ibv_create_qp(recv_ctx->pd, &init_attr);
@@ -286,6 +285,9 @@ int main(int argc, char *argv[]) {
     }
     
     printf("Received remote info: QPN=%u, PSN=%u\n", remote_info.qpn, remote_info.psn);
+    printf("Sending local info: QPN=%u, PSN=%u, rkey=0x%x, remote_addr=0x%llx\n",
+           local_info.qpn, local_info.psn, local_info.rkey, 
+           (unsigned long long)local_info.remote_addr);
     
     // Store remote connection info
     recv_ctx->remote_qpn = remote_info.qpn;
@@ -312,19 +314,24 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // Transition QP to RTR (Ready to Receive) - sufficient for receiving data
-    // Receiver only needs RTR since it's only receiving, not sending
+    // Transition QP to RTR (Ready to Receive)
     if(modify_qp_to_rtr(recv_ctx, &ah_attr)) {
         close(client_sock);
         close(server_sock);
         return 1;
     }
     
-    close(client_sock);
-    close(server_sock);
-    printf("Receiver ready! Waiting for data...\n");
+    // Transition QP to RTS (Ready to Send) - required for UC QP type
+    // Both sides must transition to RTS for UC connections
+    if(modify_qp_to_rts(recv_ctx)) {
+        close(client_sock);
+        close(server_sock);
+        return 1;
+    }
     
-    // Post receive buffer
+    // IMPORTANT: Post receive buffer BEFORE closing TCP socket
+    // For RDMA Write with Immediate, the receive must be posted before the sender sends
+    // The receive work request will be consumed when RDMA Write with Immediate arrives
     struct ibv_sge sge = {
         .addr = (uintptr_t)recv_ctx->buf,
         .length = recv_ctx->size,
@@ -340,28 +347,101 @@ int main(int argc, char *argv[]) {
     struct ibv_recv_wr *bad_wr;
     if(ibv_post_recv(recv_ctx->qp, &wr, &bad_wr)) {
         perror("ibv_post_recv");
+        close(client_sock);
+        close(server_sock);
         return 1;
     }
-    printf("Posted receive work request\n");
+    printf("Posted receive work request (ready for RDMA Write with Immediate)\n");
+    printf("Receive buffer: addr=0x%llx, length=%u, lkey=0x%x\n",
+           (unsigned long long)(uintptr_t)recv_ctx->buf, recv_ctx->size, recv_ctx->mr->lkey);
     
-    // Poll for completion
+    // Verify QP state before closing TCP
+    struct ibv_qp_attr qp_attr_check;
+    struct ibv_qp_init_attr qp_init_attr_check;
+    if(ibv_query_qp(recv_ctx->qp, &qp_attr_check, IBV_QP_STATE, &qp_init_attr_check) == 0) {
+        printf("Receiver QP state: %d (should be %d=RTS)\n", qp_attr_check.qp_state, IBV_QPS_RTS);
+    }
+    
+    // Send ready signal to sender BEFORE closing TCP socket
+    // This ensures sender knows receiver is ready before it sends
+    char ready_msg = 'R';
+    if(send(client_sock, &ready_msg, 1, 0) != 1) {
+        perror("send ready signal");
+        close(client_sock);
+        close(server_sock);
+        return 1;
+    }
+    printf("Sent ready signal to sender\n");
+    
+    close(client_sock);
+    close(server_sock);
+    printf("Receiver ready! Waiting for data...\n");
+    
+    // Poll for completion with timeout
     struct ibv_wc wc;
     int num_completions = 0;
+    int poll_count = 0;
+    const int max_polls = 100000000;  // Max polls before timeout
+    printf("Polling for completion on CQ %p, QP %p...\n", 
+           (void*)recv_ctx->cq, (void*)recv_ctx->qp);
+    
+    // Verify QP state before polling
+    struct ibv_qp_attr qp_attr;
+    struct ibv_qp_init_attr qp_init_attr;
+    if(ibv_query_qp(recv_ctx->qp, &qp_attr, IBV_QP_STATE, &qp_init_attr) == 0) {
+        printf("Receiver QP state before polling: %d (expected %d=RTS)\n", 
+               qp_attr.qp_state, IBV_QPS_RTS);
+    }
+    
     do {
         num_completions = ibv_poll_cq(recv_ctx->cq, 1, &wc);
+        poll_count++;
+        if(poll_count % 1000000 == 0) {
+            printf("Still polling... (count: %d)\n", poll_count);
+            // Check QP state periodically
+            if(ibv_query_qp(recv_ctx->qp, &qp_attr, IBV_QP_STATE, &qp_init_attr) == 0) {
+                printf("  QP state: %d\n", qp_attr.qp_state);
+            }
+        }
+        if(poll_count >= max_polls) {
+            fprintf(stderr, "Timeout: No completion received after %d polls\n", max_polls);
+            fprintf(stderr, "Sender completed successfully, but receiver got no completion!\n");
+            fprintf(stderr, "This might indicate:\n");
+            fprintf(stderr, "  1. QP connection mismatch (check QP states match)\n");
+            fprintf(stderr, "  2. Receive buffer not posted in time\n");
+            fprintf(stderr, "  3. Completion going to wrong CQ\n");
+            // Final QP state check
+            if(ibv_query_qp(recv_ctx->qp, &qp_attr, IBV_QP_STATE, &qp_init_attr) == 0) {
+                fprintf(stderr, "  Final QP state: %d\n", qp_attr.qp_state);
+            }
+            return 1;
+        }
     } while(num_completions == 0);
     
+    printf("Got completion! status=%d, opcode=%d\n", wc.status, wc.opcode);
+    
     if(wc.status != IBV_WC_SUCCESS) {
-        fprintf(stderr, "Work completion error: %s\n", ibv_wc_status_str(wc.status));
+        fprintf(stderr, "Work completion error: %s (status=%d)\n", 
+                ibv_wc_status_str(wc.status), wc.status);
         return 1;
     }
+    
+    // For RDMA Write with Immediate, opcode should be IBV_WC_RECV_RDMA_WITH_IMM
+    if(wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+        printf("Received RDMA Write with Immediate completion\n");
+    } else if(wc.opcode == IBV_WC_RECV) {
+        printf("Received regular receive completion\n");
+    } else {
+        printf("Unexpected opcode: %d\n", wc.opcode);
+    }
+    
     if(wc.wc_flags & IBV_WC_WITH_IMM) {
-        printf("Received immediate data: %x\n", ntohl(wc.imm_data));
+        printf("Received immediate data: 0x%x\n", ntohl(wc.imm_data));
     }
     
     printf("Received data: %s\n", recv_ctx->buf);
-    printf("Receive completed successfully! (wr_id: %lu, byte_len: %u)\n", 
-           wc.wr_id, wc.byte_len);
+    printf("Receive completed successfully! (wr_id: %lu, byte_len: %u, opcode: %d)\n", 
+           wc.wr_id, wc.byte_len, wc.opcode);
     
     return 0;
 }
