@@ -398,7 +398,6 @@ int main(int argc, char *argv[]) {
         poll_count++;
         if(poll_count % 1000000 == 0) {
             printf("Still polling... (count: %d)\n", poll_count);
-            // Check QP state periodically
             if(ibv_query_qp(recv_ctx->qp, &qp_attr, IBV_QP_STATE, &qp_init_attr) == 0) {
                 printf("  QP state: %d\n", qp_attr.qp_state);
             }
@@ -410,7 +409,6 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "  1. QP connection mismatch (check QP states match)\n");
             fprintf(stderr, "  2. Receive buffer not posted in time\n");
             fprintf(stderr, "  3. Completion going to wrong CQ\n");
-            // Final QP state check
             if(ibv_query_qp(recv_ctx->qp, &qp_attr, IBV_QP_STATE, &qp_init_attr) == 0) {
                 fprintf(stderr, "  Final QP state: %d\n", qp_attr.qp_state);
             }
