@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <infiniband/verbs.h>
-
+#include "devinfo.h"
 // Default TCP port for RDMA connection establishment
 #define RDMA_TCP_PORT 18515
 
@@ -47,7 +47,7 @@ struct SDR_context {
     int size;
     int num_packets;
     struct ibv_port_attr portinfo;
-    
+    union ibv_gid *gid;    
     // Connection info for QP modification
     uint32_t remote_qpn;        // Remote QP number
     uint32_t sq_psn;            // Send queue PSN
@@ -61,6 +61,7 @@ int modify_qp_to_rtr(struct SDR_context *ctx, struct ibv_ah_attr *ah_attr);
 
 int modify_qp_to_rts(struct SDR_context *ctx); 
 
+struct SDR_context* context_create(char* req_dev_name); 
 
 
 #endif // RDMA_COMMON_H

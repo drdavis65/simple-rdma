@@ -13,7 +13,6 @@
 #include <errno.h>
 #include <stdint.h>
 #include <inttypes.h>
-#include "devinfo.h"
 #include "rdma_common.h"
 
 
@@ -35,75 +34,10 @@ int main(int argc, char *argv[]) {
     
     printf("Sender connecting to receiver at %s:%d\n", receiver_ip, tcp_port);
     
-    int num_devices = 0;
-
-    struct ibv_device** dev_list = ibv_get_device_list(&num_devices);
-
-    if(!dev_list) {
-        perror("ibv_get_device_list");
-    }
-
-    printf("Found %d ibv devices\n", num_devices);;
-
-    for(int i = 0; i < num_devices; i++) {
-        struct ibv_device* dev = dev_list[i];
-        printf("    %d name: %s\n", i, ibv_get_device_name(dev)); 
-    }
-
-    const char* dev_name = ibv_get_device_name(dev_list[0]);
-
-    struct SDR_context *send_ctx = malloc(sizeof(*send_ctx));
-
-    send_ctx->ctx = ibv_open_device(dev_list[0]);
-
-    if(!send_ctx->ctx) {
-        perror("ibv_open_device");
-    }
-
-    struct ibv_device_attr *dev_attr = malloc(sizeof(*dev_attr));
-    memset(dev_attr, 0, sizeof(*dev_attr));
-
-    if(ibv_query_device(send_ctx->ctx, dev_attr)) {
-        perror("ibv_query_device");
-    }
-
-    printf("For device: %s\n    Max mr size: %" PRIu64 
-           "\n    Max qp: %" PRIu32 
-           "\n    Max qp wr: %d\n",
-           dev_name, 
-           dev_attr->max_mr_size,
-           dev_attr->max_qp,
-           dev_attr->max_qp_wr);
-
-    memset(&send_ctx->portinfo, 0, sizeof(send_ctx->portinfo));
-
-    if(ibv_query_port(send_ctx->ctx, 1, &send_ctx->portinfo)) {
-        perror("ibv_query_port");
-    }
-
-    printf("Device state: %s\nActive mtu: %s\nSpeed: %s\n",
-           port_state_str(send_ctx->portinfo.state),
-           mtu_str(send_ctx->portinfo.active_mtu),
-           speed_str(send_ctx->portinfo.active_speed));
-
-    union ibv_gid* gid = malloc(sizeof(*gid));
-
-    if(ibv_query_gid(send_ctx->ctx, 1, 3, gid)) {
-        perror("ibv_query_gid");
-    }
-
-    struct ibv_gid_entry* entry = malloc(sizeof(*entry));
-    
-    if(ibv_query_gid_ex(send_ctx->ctx, 1, 3, entry, 0)) {
-        perror("ibv_query_gid_ex");
-    }
-
-    printf("GID type: %s\n", gid_type_str(entry->gid_type)); 
-
-    send_ctx->num_packets = 3;
+    struct SDR_context* send_ctx = context_create("mlx5_0");
 
     send_ctx->size = 3 * 1024 * sizeof(char);
-
+    send_ctx->num_packets = send_ctx->size / send_ctx->portinfo.active_mtu;;
     // Use posix_memalign for page-aligned memory (required for RDMA)
     if(posix_memalign((void**)&send_ctx->buf, sysconf(_SC_PAGESIZE), send_ctx->size)) {
         perror("posix_memalign");

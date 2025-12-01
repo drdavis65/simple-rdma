@@ -1,0 +1,3 @@
+[submodule "ec-perf"]
+	path = ec-perf
+	url = git@github.com:spcl/ec-perf.git

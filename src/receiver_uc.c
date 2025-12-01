@@ -13,7 +13,6 @@
 #include <errno.h>
 #include <stdint.h>
 #include <inttypes.h>
-#include "devinfo.h"
 #include "rdma_common.h"
 
 
@@ -30,82 +29,11 @@ int main(int argc, char *argv[]) {
     }
     
     printf("Receiver starting on port %d\n", tcp_port);
-    
-    int num_devices = 0;
-    struct ibv_device** dev_list = ibv_get_device_list(&num_devices);
-    
-    if(!dev_list) {
-        perror("ibv_get_device_list");
-        return 1;
-    }
-    
-    printf("Found %d ibv devices\n", num_devices);
-    
-    if(num_devices == 0) {
-        fprintf(stderr, "No InfiniBand devices found\n");
-        return 1;
-    }
-    
-    for(int i = 0; i < num_devices; i++) {
-        struct ibv_device* dev = dev_list[i];
-        printf("    %d name: %s\n", i, ibv_get_device_name(dev)); 
-    }
-    
-    const char* dev_name = ibv_get_device_name(dev_list[0]);
-    struct SDR_context *recv_ctx = malloc(sizeof(*recv_ctx));
-    memset(recv_ctx, 0, sizeof(*recv_ctx));
-    
-    recv_ctx->ctx = ibv_open_device(dev_list[0]);
-    if(!recv_ctx->ctx) {
-        perror("ibv_open_device");
-        return 1;
-    }
-    
-    struct ibv_device_attr *dev_attr = malloc(sizeof(*dev_attr));
-    memset(dev_attr, 0, sizeof(*dev_attr));
-    
-    if(ibv_query_device(recv_ctx->ctx, dev_attr)) {
-        perror("ibv_query_device");
-        return 1;
-    }
-    
-    printf("For device: %s\n    Max mr size: %" PRIu64 
-           "\n    Max qp: %" PRIu32 
-           "\n    Max qp wr: %d\n",
-           dev_name, 
-           dev_attr->max_mr_size,
-           dev_attr->max_qp,
-           dev_attr->max_qp_wr);
-    
-    memset(&recv_ctx->portinfo, 0, sizeof(recv_ctx->portinfo));
-    
-    if(ibv_query_port(recv_ctx->ctx, 1, &recv_ctx->portinfo)) {
-        perror("ibv_query_port");
-        return 1;
-    }
-    
-    printf("Device state: %s\nActive mtu: %s\nSpeed: %s\n",
-           port_state_str(recv_ctx->portinfo.state),
-           mtu_str(recv_ctx->portinfo.active_mtu),
-           speed_str(recv_ctx->portinfo.active_speed));
-    
-    union ibv_gid* gid = malloc(sizeof(*gid));
-    if(ibv_query_gid(recv_ctx->ctx, 1, 3, gid)) {
-        perror("ibv_query_gid");
-        return 1;
-    }
-    
-    struct ibv_gid_entry* entry = malloc(sizeof(*entry));
-    if(ibv_query_gid_ex(recv_ctx->ctx, 1, 3, entry, 0)) {
-        perror("ibv_query_gid_ex");
-        return 1;
-    }
-    
-    printf("GID type: %s\n", gid_type_str(entry->gid_type)); 
-    
-    recv_ctx->num_packets = 3;
+
+    struct SDR_context* recv_ctx = context_create("mlx5_0");
+
     recv_ctx->size = 3 * 1024 * sizeof(char);
-    
+    recv_ctx->num_packets = recv_ctx->size / recv_ctx->portinfo.active_mtu;
     // Use posix_memalign for page-aligned memory (required for RDMA)
     if(posix_memalign((void**)&recv_ctx->buf, sysconf(_SC_PAGESIZE), recv_ctx->size)) {
         perror("posix_memalign");
@@ -205,7 +133,7 @@ int main(int argc, char *argv[]) {
     struct rdma_conn_info local_info = {
         .qpn = local_qpn,
         .psn = recv_ctx->sq_psn,
-        .gid = *gid,
+        .gid = *(recv_ctx->gid),
         .lid = recv_ctx->portinfo.lid,
         .rkey = recv_ctx->mr->rkey,
         .remote_addr = (uint64_t)(uintptr_t)recv_ctx->buf  // Address of receive buffer

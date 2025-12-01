@@ -160,3 +160,82 @@ int modify_qp_to_rts(struct SDR_context *ctx) {
     printf("QP transitioned to RTS\n");
     return 0;
 }
+
+struct SDR_context* context_create(char* req_dev_name) {
+    int num_devices = 0;
+    struct ibv_device** dev_list = ibv_get_device_list(&num_devices);
+    
+    if(!dev_list) {
+        perror("ibv_get_device_list");
+        return 1;
+    }
+    
+    printf("Found %d ibv devices\n", num_devices);
+    
+    if(num_devices == 0) {
+        fprintf(stderr, "No InfiniBand devices found\n");
+        return 1;
+    }
+    
+    struct SDR_context *ctx_ = malloc(sizeof(*ctx_));
+    memset(ctx_, 0, sizeof(*ctx_));
+    for(int i = 0; i < num_devices; i++) {
+        struct ibv_device* dev = dev_list[i];
+        printf("    %d name: %s\n", i, ibv_get_device_name(dev)); 
+        if(strcmp(req_dev_name, ibv_get_device_name(dev)) == 0) {
+            ctx_->ctx = ibv_open_device(dev_list[i]);
+            if(!ctx_->ctx) {
+                perror("ibv_open_device");
+                return 1;
+            }
+            break;
+        }
+    }
+    
+    struct ibv_device_attr *dev_attr = malloc(sizeof(*dev_attr));
+    memset(dev_attr, 0, sizeof(*dev_attr));
+    
+    if(ibv_query_device(ctx_->ctx, dev_attr)) {
+        perror("ibv_query_device");
+        return 1;
+    }
+    
+    printf("For device: %s\n    Max mr size: %" PRIu64 
+           "\n    Max qp: %" PRIu32 
+           "\n    Max qp wr: %d\n",
+           req_dev_name, 
+           dev_attr->max_mr_size,
+           dev_attr->max_qp,
+           dev_attr->max_qp_wr);
+    
+    memset(&ctx_->portinfo, 0, sizeof(ctx_->portinfo));
+    
+    if(ibv_query_port(ctx_->ctx, 1, &ctx_->portinfo)) {
+        perror("ibv_query_port");
+        return 1;
+    }
+    
+    printf("Device state: %s\nActive mtu: %s\nSpeed: %s\n",
+           port_state_str(ctx_->portinfo.state),
+           mtu_str(ctx_->portinfo.active_mtu),
+           speed_str(ctx_->portinfo.active_speed));
+    
+    union ibv_gid* gid = malloc(sizeof(*gid));
+    
+    ctx_->gid = gid;
+
+    if(ibv_query_gid(ctx_->ctx, 1, 3, gid)) {
+        perror("ibv_query_gid");
+        return 1;
+    }
+    
+    struct ibv_gid_entry* entry = malloc(sizeof(*entry));
+    if(ibv_query_gid_ex(ctx_->ctx, 1, 3, entry, 0)) {
+        perror("ibv_query_gid_ex");
+        return 1;
+    }
+    
+    printf("GID type: %s\n", gid_type_str(entry->gid_type)); 
+
+    return ctx_;
+}
