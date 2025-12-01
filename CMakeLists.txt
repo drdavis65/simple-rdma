@@ -69,28 +69,8 @@ target_link_libraries(receiver_uc
     ${IBVERBS_LIB}
 )
 
-# Receiver RC executable (RC - Reliable Connection)
-add_executable(receiver_rc
-    src/reciever_rc.c
-)
-
-target_link_libraries(receiver_rc
-    rdma_common
-    ${IBVERBS_LIB}
-)
-
-# Sender RC executable (RC - Reliable Connection)
-add_executable(sender_rc
-    src/sender_rc.c
-)
-
-target_link_libraries(sender_rc
-    rdma_common
-    ${IBVERBS_LIB}
-)
-
 # Installation (optional)
-install(TARGETS sender_uc receiver_uc sender_rc receiver_rc
+install(TARGETS sender_uc receiver_uc
     RUNTIME DESTINATION bin
 )
 

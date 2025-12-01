@@ -16,70 +16,6 @@
 #include "devinfo.h"
 #include "rdma_common.h"
 
-struct receiver_context {
-    struct ibv_context *ctx;
-    struct ibv_comp_channel *channel;
-    struct ibv_pd *pd;
-    struct ibv_mr *mr;
-    struct ibv_cq *cq;
-    struct ibv_qp *qp;
-    char *buf;
-    int size;
-    int num_packets;
-    struct ibv_port_attr portinfo;
-    
-    // Connection info for QP modification
-    uint32_t remote_qpn;        // Remote QP number
-    uint32_t sq_psn;            // Send queue PSN
-    uint32_t rq_psn;            // Receive queue PSN
-    struct ibv_ah *ah;          // Address Handle (for routing)
-    uint32_t remote_rkey;       // Remote memory region key (for RDMA ops)
-};
-
-// Transition QP to RTR (Ready to Receive) state
-// For UC QP type, required fields: STATE, AV, PATH_MTU, DEST_QPN, RQ_PSN
-static int modify_qp_to_rtr(struct receiver_context *ctx, struct ibv_ah_attr *ah_attr) {
-    struct ibv_qp_attr attr = {
-        .qp_state = IBV_QPS_RTR,
-        .path_mtu = ctx->portinfo.active_mtu,
-        .dest_qp_num = ctx->remote_qpn,
-        .rq_psn = ctx->rq_psn,
-        .ah_attr = *ah_attr
-    };
-    
-    // For UC QP type, RTR requires: STATE, AV, PATH_MTU, DEST_QPN, RQ_PSN
-    // (max_dest_rd_atomic and min_rnr_timer are for RC QP type)
-    int rtr_mask = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | 
-                   IBV_QP_DEST_QPN | IBV_QP_RQ_PSN;
-    
-    if(ibv_modify_qp(ctx->qp, &attr, rtr_mask)) {
-        perror("Failed to modify QP to RTR");
-        return -1;
-    }
-    printf("Receiver QP transitioned to RTR\n");
-    return 0;
-}
-
-// Transition QP to RTS (Ready to Send) state
-// For UC QP type, only IBV_QP_STATE and IBV_QP_SQ_PSN are required
-static int modify_qp_to_rts(struct receiver_context *ctx) {
-    struct ibv_qp_attr attr = {
-        .qp_state = IBV_QPS_RTS,
-        .sq_psn = ctx->sq_psn
-    };
-    
-    // For UC QP type, RTS only requires STATE and SQ_PSN
-    // (timeout, retry_cnt, rnr_retry are for RC QP type)
-    int rts_mask = IBV_QP_STATE | IBV_QP_SQ_PSN;
-    
-    if(ibv_modify_qp(ctx->qp, &attr, rts_mask)) {
-        perror("Failed to modify QP to RTS");
-        return -1;
-    }
-    printf("Receiver QP transitioned to RTS - ready to receive!\n");
-    return 0;
-}
-
 
 int main(int argc, char *argv[]) {
     int tcp_port = RDMA_TCP_PORT;
@@ -116,7 +52,7 @@ int main(int argc, char *argv[]) {
     }
     
     const char* dev_name = ibv_get_device_name(dev_list[0]);
-    struct receiver_context *recv_ctx = malloc(sizeof(*recv_ctx));
+    struct SDR_context *recv_ctx = malloc(sizeof(*recv_ctx));
     memset(recv_ctx, 0, sizeof(*recv_ctx));
     
     recv_ctx->ctx = ibv_open_device(dev_list[0]);

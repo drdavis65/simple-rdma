@@ -119,3 +119,44 @@ int exchange_conn_info_as_sender(int sockfd, struct rdma_conn_info *local_info,
     return 0;
 }
 
+int modify_qp_to_rtr(struct SDR_context *ctx, struct ibv_ah_attr *ah_attr) {
+    struct ibv_qp_attr attr = {
+        .qp_state = IBV_QPS_RTR,
+        .path_mtu = ctx->portinfo.active_mtu,
+        .dest_qp_num = ctx->remote_qpn,
+        .rq_psn = ctx->rq_psn,
+        .ah_attr = *ah_attr
+    };
+    
+    // For UC QP type, RTR requires: STATE, AV, PATH_MTU, DEST_QPN, RQ_PSN
+    // (max_dest_rd_atomic and min_rnr_timer are for RC QP type)
+    int rtr_mask = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | 
+                   IBV_QP_DEST_QPN | IBV_QP_RQ_PSN;
+    
+    if(ibv_modify_qp(ctx->qp, &attr, rtr_mask)) {
+        perror("Failed to modify QP to RTR");
+        return -1;
+    }
+    printf("QP transitioned to RTR\n");
+    return 0;
+}
+
+// Transition QP to RTS (Ready to Send) state
+// For UC QP type, only IBV_QP_STATE and IBV_QP_SQ_PSN are required
+// (timeout, retry_cnt, rnr_retry, max_rd_atomic are for RC QP type)
+int modify_qp_to_rts(struct SDR_context *ctx) {
+    struct ibv_qp_attr attr = {
+        .qp_state = IBV_QPS_RTS,
+        .sq_psn = ctx->sq_psn
+    };
+    
+    // For UC QP type, RTS only requires STATE and SQ_PSN
+    int rts_mask = IBV_QP_STATE | IBV_QP_SQ_PSN;
+    
+    if(ibv_modify_qp(ctx->qp, &attr, rts_mask)) {
+        perror("Failed to modify QP to RTS");
+        return -1;
+    }
+    printf("QP transitioned to RTS\n");
+    return 0;
+}

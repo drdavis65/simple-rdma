@@ -101,15 +101,15 @@ static const char *port_phy_state_str(uint8_t phys_state)
 	}
 }
 
-static const char *atomic_cap_str(enum ibv_atomic_cap atom_cap)
-{
-	switch (atom_cap) {
-	case IBV_ATOMIC_NONE: return "ATOMIC_NONE";
-	case IBV_ATOMIC_HCA:  return "ATOMIC_HCA";
-	case IBV_ATOMIC_GLOB: return "ATOMIC_GLOB";
-	default:              return "invalid atomic capability";
-	}
-}
+//static const char *atomic_cap_str(enum ibv_atomic_cap atom_cap)
+//{
+//	switch (atom_cap) {
+//	case IBV_ATOMIC_NONE: return "ATOMIC_NONE";
+//	case IBV_ATOMIC_HCA:  return "ATOMIC_HCA";
+//	case IBV_ATOMIC_GLOB: return "ATOMIC_GLOB";
+//	default:              return "invalid atomic capability";
+//	}
+//}
 
 static const char *mtu_str(enum ibv_mtu max_mtu)
 {
