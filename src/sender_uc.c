@@ -140,7 +140,7 @@ int main(int argc, char *argv[]) {
     struct rdma_conn_info local_info = {
         .qpn = local_qpn,
         .psn = send_ctx->sq_psn,
-        .gid = *gid,
+        .gid = *(send_ctx->gid),
         .lid = send_ctx->portinfo.lid,
         .rkey = 0,  // Not needed for send operations
         .remote_addr = 0  // Not needed for sender
